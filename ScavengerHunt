@@ -1,0 +1,220 @@
+import SwiftUI
+import MapKit
+import PhotosUI
+import CoreLocation
+
+struct Task: Identifiable {
+    let id = UUID()
+    let title: String
+    let description: String
+    var image: UIImage?
+    var location: CLLocationCoordinate2D?
+    var isCompleted: Bool = false
+}
+
+struct IdentifiableLocation: Identifiable {
+    let id = UUID()
+    let coordinate: CLLocationCoordinate2D
+}
+
+class TaskViewModel: ObservableObject {
+    @Published var tasks: [Task] = [
+        Task(title: "Find a tree", description: "Take a photo of a tree."),
+        Task(title: "Street Art", description: "Find and capture a street art piece."),
+        Task(title: "Historic Landmark", description: "Photograph a local historic landmark.")
+    ]
+}
+
+struct TaskListView: View {
+    @StateObject var viewModel = TaskViewModel()
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                List {
+                    ForEach(viewModel.tasks.indices, id: \ .self) { index in
+                        NavigationLink(destination: TaskDetailView(task: $viewModel.tasks[index])) {
+                            HStack {
+                                Text(viewModel.tasks[index].title)
+                                    .strikethrough(viewModel.tasks[index].isCompleted, color: .gray)
+                                Spacer()
+                                if viewModel.tasks[index].isCompleted {
+                                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Scavenger Hunt")
+        }
+    }
+}
+
+struct TaskDetailView: View {
+    @Binding var task: Task
+    @State private var showingImagePicker = false
+    @State private var showingMapPicker = false
+    @State private var selectedImage: UIImage?
+    
+    var body: some View {
+        VStack {
+            Text(task.description)
+                .padding()
+            
+            if let image = selectedImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 200)
+            }
+            
+            Button("Attach Photo") {
+                showingImagePicker = true
+            }
+            .padding()
+            .sheet(isPresented: $showingImagePicker) {
+                PhotoPicker(image: $selectedImage) {
+                    task.isCompleted = true
+                    task.image = selectedImage
+                }
+            }
+            
+            Button("Set Location") {
+                showingMapPicker = true
+            }
+            .padding()
+            .sheet(isPresented: $showingMapPicker) {
+                MapPickerView(selectedLocation: $task.location)
+            }
+            
+            if let taskLocation = task.location {
+                let identifiableLocation = IdentifiableLocation(coordinate: taskLocation)
+                Map(coordinateRegion: .constant(MKCoordinateRegion(
+                    center: taskLocation,
+                    span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                )), annotationItems: [identifiableLocation]) { location in
+                    MapAnnotation(coordinate: location.coordinate) {
+                        VStack {
+                            Image(systemName: "mappin.circle.fill")
+                                .foregroundColor(.red)
+                                .font(.title)
+                            Text(task.title)
+                                .font(.caption)
+                                .bold()
+                                .background(Color.white.opacity(0.7))
+                                .cornerRadius(5)
+                        }
+                    }
+                }
+                .frame(height: 300)
+                .cornerRadius(10)
+                .padding()
+            }
+        }
+        .navigationTitle(task.title)
+    }
+}
+
+struct MapPickerView: View {
+    @Binding var selectedLocation: CLLocationCoordinate2D?
+    @State private var region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
+        span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+    )
+    @State private var annotation: IdentifiableLocation?
+    @Environment(\.presentationMode) var presentationMode
+    
+    var body: some View {
+        VStack {
+            Map(coordinateRegion: $region, interactionModes: .all, annotationItems: annotation.map { [$0] } ?? []) { location in
+                MapAnnotation(coordinate: location.coordinate) {
+                    Image(systemName: "mappin.circle.fill")
+                        .foregroundColor(.red)
+                        .font(.title)
+                }
+            }
+            .frame(height: 300)
+            .cornerRadius(10)
+            .padding()
+            .gesture(TapGesture().onEnded {
+                let mapCenter = region.center
+                annotation = IdentifiableLocation(coordinate: mapCenter)
+            })
+            
+            HStack {
+                Button("Confirm Location") {
+                    if let annotation = annotation {
+                        selectedLocation = annotation.coordinate
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+                .padding()
+                
+                Button("Go Back") {
+                    presentationMode.wrappedValue.dismiss()
+                }
+                .padding()
+            }
+        }
+    }
+}
+
+struct PhotoPicker: UIViewControllerRepresentable {
+    @Binding var image: UIImage?
+    var onComplete: () -> Void
+    
+    class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        var parent: PhotoPicker
+        
+        init(parent: PhotoPicker) {
+            self.parent = parent
+        }
+        
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            picker.dismiss(animated: true)
+            guard let provider = results.first?.itemProvider else { return }
+            
+            if provider.canLoadObject(ofClass: UIImage.self) {
+                provider.loadObject(ofClass: UIImage.self) { (image, error) in
+                    DispatchQueue.main.async {
+                        if let uiImage = image as? UIImage {
+                            self.parent.image = uiImage
+                        }
+                        self.parent.onComplete()
+                    }
+                }
+            }
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        return Coordinator(parent: self)
+    }
+    
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.filter = .images
+        config.selectionLimit = 1
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+}
+
+struct ContentView: View {
+    var body: some View {
+        TaskListView()
+    }
+}
+
+@main
+struct ScavengerHuntApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
